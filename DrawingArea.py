@@ -21,12 +21,12 @@ class HoverableRectItem(QGraphicsRectItem):
 
     def hoverEnterEvent(self, event):
         self.setPen(self.hoverPen)
-        print("Hover enter")
+        # print("Hover enter")
         super().hoverEnterEvent(event)
 
     def hoverLeaveEvent(self, event):
         self.setPen(self.normalPen)
-        print("Hover leave")
+        # print("Hover leave")
         super().hoverLeaveEvent(event)
 
 
@@ -36,6 +36,18 @@ class DrawingArea(QGraphicsView):
     def __init__(self, scene: QGraphicsScene):
         super().__init__(scene)
         self.initializeScene(scene)
+       # Initialize QLineEdit widgets for dimension display
+        self.lengthEdit = QLineEdit(self)
+        self.widthEdit = QLineEdit(self)
+        self.lengthEdit.setReadOnly(False)  # Allow user input
+        self.widthEdit.setReadOnly(False)
+        self.lengthEdit.hide()
+        self.widthEdit.hide()
+        self.setFocusPolicy(Qt.StrongFocus)
+
+        # Connect the textChanged signals
+        self.lengthEdit.textChanged.connect(self.updateRectFromInput)
+        self.widthEdit.textChanged.connect(self.updateRectFromInput)
 
     def initializeScene(self, scene):
         """Set up the initial drawing area scene."""
@@ -53,7 +65,18 @@ class DrawingArea(QGraphicsView):
         scenePos = self.mapToScene(event.pos())
         self.positionChanged.emit(f"Scene Position = ({scenePos.x():.2f}, {scenePos.y():.2f})")
         if self.drawingMode == 'rectangle' and self.firstClickPoint:
-            self.updateTemporaryRectangle(event)
+            # Only update the QLineEdit widgets and temporary rectangle if there's no direct input happening
+            if not self.lengthEdit.hasFocus() and not self.widthEdit.hasFocus():
+                currentRect = QRectF(self.firstClickPoint, scenePos).normalized()
+                self.lengthEdit.setText(f"{currentRect.width():.2f}")
+                self.widthEdit.setText(f"{currentRect.height():.2f}")
+                self.updateTemporaryRectangleDirectly(self.firstClickPoint, scenePos)
+            
+            # Adjust QLineEdit positions
+            self.lengthEdit.move(10, self.viewport().height() - 60)
+            self.widthEdit.move(10, self.viewport().height() - 30)
+            self.lengthEdit.show()
+            self.widthEdit.show()
         super().mouseMoveEvent(event)
 
     def mousePressEvent(self, event: QMouseEvent):
@@ -91,6 +114,16 @@ class DrawingArea(QGraphicsView):
         # Create and add new temporary rectangle
         self.tempRect = self.scene.addRect(rect, QPen(Qt.white))
 
+        if self.drawingMode == 'rectangle' and self.firstClickPoint:
+            endPoint = self.mapToScene(event.pos())
+            self.updateTemporaryRectangleDirectly(self.firstClickPoint, endPoint)
+
+    def updateTemporaryRectangleDirectly(self, startPoint, endPoint):
+        if self.tempRect:
+            self.scene.removeItem(self.tempRect)
+        rect = QRectF(startPoint, endPoint).normalized()
+        self.tempRect = self.scene.addRect(rect, QPen(Qt.white))
+
     def finalizeDrawing(self, secondClickPoint):
         """Finalize the drawing of the current shape."""
         # Remove the temporary rectangle
@@ -106,6 +139,49 @@ class DrawingArea(QGraphicsView):
         finalRect.setFlags(QGraphicsItem.ItemIsSelectable | QGraphicsItem.ItemIsMovable)
         self.scene.addItem(finalRect)
         self.firstClickPoint = None  # Reset for the next drawing
+        self.lengthEdit.hide()
+        self.widthEdit.hide()
+
+    def finalizeDrawingFromInput(self):
+        print("finalizeDrawingFromInput called")
+        # Check if we have a starting point and no existing temporary rectangle
+        if not self.firstClickPoint or not self.tempRect:
+            print("Either no starting point or temporary rectangle does not exist.")
+            return  # Return early if the conditions are not met
+
+        try:
+            # Retrieve and convert input dimensions to float
+            length = float(self.lengthEdit.text())
+            width = float(self.widthEdit.text())
+            print(f"Length: {length}, Width: {width}")
+        except ValueError:
+            print("Invalid input for rectangle dimensions.")
+            return
+
+        # Calculate the second point based on input dimensions
+        secondPoint = QPointF(self.firstClickPoint.x() + length, self.firstClickPoint.y() + width)
+        print(f"First Point: {self.firstClickPoint}, Second Point: {secondPoint}")
+
+        # Remove the existing temporary rectangle, if any
+        if self.tempRect:
+            self.scene.removeItem(self.tempRect)
+            self.tempRect = None
+
+        # Create and add the final rectangle based on input dimensions
+        rect = QRectF(self.firstClickPoint, secondPoint).normalized()
+        finalRect = HoverableRectItem(rect)
+        finalRect.setPen(QPen(Qt.white))
+        finalRect.setBrush(QColor(255, 0, 0, 127))
+        finalRect.setFlags(QGraphicsItem.ItemIsSelectable | QGraphicsItem.ItemIsMovable)
+        self.scene.addItem(finalRect)
+
+        # Reset the drawing state
+        self.firstClickPoint = None
+        self.lengthEdit.hide()
+        self.widthEdit.hide()
+        self.lengthEdit.clear()
+        self.widthEdit.clear()
+
 
     def configureScrollBars(self):
         """Configure the scroll bars for the drawing area."""
@@ -122,3 +198,27 @@ class DrawingArea(QGraphicsView):
         """Set the current drawing mode."""
         self.drawingMode = mode
         print(f"Switched to {mode} mode.")
+
+    def updateRectFromInput(self):
+        if not self.firstClickPoint or not self.tempRect:
+            return  # Do nothing if we don't have a starting point or an active rectangle
+        
+        try:
+            length = float(self.lengthEdit.text())
+            width = float(self.widthEdit.text())
+        except ValueError:
+            return  # Do nothing if the input can't be converted to float
+
+        # Calculate the second point of the rectangle based on length and width input
+        secondPoint = QPointF(self.firstClickPoint.x() + length, self.firstClickPoint.y() + width)
+
+        # Update or create the temporary rectangle
+        self.updateTemporaryRectangleDirectly(self.firstClickPoint, secondPoint)
+
+    def keyPressEvent(self, event):
+        print("keyPressEvent")
+        if event.key() in (Qt.Key_Return, Qt.Key_Enter):
+            print("Enter pressed")
+            self.finalizeDrawingFromInput()
+        else:
+            super().keyPressEvent(event)

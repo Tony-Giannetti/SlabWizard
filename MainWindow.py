@@ -1,4 +1,4 @@
-
+#MainWindow.py
 from PyQt5.QtWidgets import (
     QMainWindow,
     QApplication,
@@ -13,7 +13,6 @@ from PyQt5.QtCore import Qt, QSize
 from PyQt5.QtGui import QIcon
 from DrawingArea import DrawingArea
 import sys
-
 
 class MainWindow(QMainWindow):
     def __init__(self):
@@ -52,15 +51,21 @@ class MainWindow(QMainWindow):
         self.leftToolBar.addAction(rectangleAction)
 
         # Connect actions to methods
-
         rectangleAction.triggered.connect(lambda: self.drawingArea.setDrawingMode('rectangle'))
 
     def updatePositionLabel(self, text):
         self.positionLabel.setText(text)
 
+    def keyPressEvent(self, event):
+        if event.key() == Qt.Key_Escape:
+            self.drawingArea.setDrawingMode('selection')
+        else:
+            super().keyPressEvent(event)
+            
 
 if __name__ == '__main__':
     app = QApplication(sys.argv)
     mainWindow = MainWindow()
     mainWindow.show()
+    mainWindow.drawingArea.setFocus()
     sys.exit(app.exec_())

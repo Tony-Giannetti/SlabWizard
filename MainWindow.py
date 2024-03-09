@@ -59,6 +59,14 @@ class MainWindow(QMainWindow):
     def keyPressEvent(self, event):
         if event.key() == Qt.Key_Escape:
             self.drawingArea.setDrawingMode('selection')
+
+        if event.key() == Qt.Key_R:
+            self.drawingArea.setDrawingMode('rectangle')
+
+        if event.key() == Qt.Key_Enter:
+            self.drawingArea.finalizeDrawing()
+            # print("Enter pressed")
+
         else:
             super().keyPressEvent(event)
             

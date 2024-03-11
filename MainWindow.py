@@ -67,6 +67,15 @@ class MainWindow(QMainWindow):
             self.drawingArea.finalizeDrawing()
             # print("Enter pressed")
 
+        if event.key() == Qt.Key_C:
+            self.drawingArea.calculateAllSnapPoints()
+            print("Calculate all snap points")
+
+        if event.key() == Qt.Key_D:
+            points = self.drawingArea.calculateAllSnapPoints()
+            self.drawingArea.displaySnapPoints(points)
+            print("Display snap points")
+
         else:
             super().keyPressEvent(event)
             

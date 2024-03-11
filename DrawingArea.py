@@ -50,18 +50,20 @@ class DrawingArea(QGraphicsView):
         self.widthEdit.hide()
         self.setFocusPolicy(Qt.StrongFocus)
 
+        self._isDraggingStarted = False  # Initialize the drag operation flag
+
         # Connect the textChanged signals
         self.lengthEdit.textChanged.connect(self.updateRectFromInput)
         self.widthEdit.textChanged.connect(self.updateRectFromInput)
 
-        self.snapPointVisuals = [] 
-        self.snapPoints = []  # List to hold QPointF objects for snap points
         self.snapDetectionRadius = 20  # Pixels within which snapping should occur
         self.currentlyDraggingItem = None  # Track the item being dragged
         self.dragOffset = QPointF(0, 0)  # Initialize dragOffset
 
+        self.fixedSnapPoints = []
+        self.draggingSnapPoints = []
+
     def initializeScene(self, scene):
-        """Set up the initial drawing area scene."""
         self.scene = scene
         self.setBackgroundBrush(QColor("black"))
         self.setMouseTracking(True)
@@ -76,14 +78,13 @@ class DrawingArea(QGraphicsView):
         self.positionChanged.emit(f"Scene Position = ({scenePos.x():.2f}, {scenePos.y():.2f})")
 
         if self.currentlyDraggingItem:
-            newPos = scenePos - self.dragOffset
-            closestSnapPoint, minDistance = self.findClosestSnapPoint(newPos + self.dragOffset)  # Adjust for dragOffset
-            if minDistance <= self.snapDetectionRadius:
-                # Snap by setting the position to the closest snap point adjusted by dragOffset.
-                self.currentlyDraggingItem.setPos(closestSnapPoint)
-            else:
-                self.currentlyDraggingItem.setPos(newPos)
-            self.showSnapPoints(True)  # Refresh snap points.
+
+            if self._isDraggingStarted:
+                points = self.calculateFixedSnapPoints(excludeItem=self.currentlyDraggingItem)
+                self.displaySnapPoints(points, self.fixedSnapPoints)  # Use fixedSnapPoints here
+                self._isDraggingStarted = False
+
+            self.handleDragging(event.pos())
 
         elif self.drawingMode == 'rectangle' and self.firstClickPoint:
             # This block is for drawing rectangles; it updates the temporary rectangle and the dimension inputs.
@@ -100,13 +101,10 @@ class DrawingArea(QGraphicsView):
             self.widthEdit.show()
         else:
             # Hide snap points when not dragging or drawing.
-            self.showSnapPoints(False)
-
-        super().mouseMoveEvent(event)
-
+            # self.showSnapPoints(False)
+            super().mouseMoveEvent(event)
 
     def mousePressEvent(self, event: QMouseEvent):
-        """Handle mouse press events."""
         if event.button() == Qt.LeftButton and self.drawingMode == 'rectangle':
             if not self.firstClickPoint:
                 # First click - set the starting point
@@ -120,6 +118,9 @@ class DrawingArea(QGraphicsView):
             self.currentlyDraggingItem = item
             # Calculate the offset from the item's top-left corner to the mouse position
             self.dragOffset = self.mapToScene(event.pos()) - item.pos()
+            print(f"Item pos = ({item.pos().x()}, {item.pos().y()})")
+            print(f"Drag offset = ({self.dragOffset.x()}, {self.dragOffset.y()})")
+            self._isDraggingStarted = True  # Dragging starts
         else:
             self.currentlyDraggingItem = None
             self.dragOffset = QPointF(0, 0)
@@ -127,7 +128,9 @@ class DrawingArea(QGraphicsView):
     def mouseReleaseEvent(self, event: QMouseEvent):
         if self.currentlyDraggingItem:
             self.currentlyDraggingItem = None
-            self.showSnapPoints(False)  # Hide snap points
+            # self.showSnapPoints(False)  # Hide snap points
+            self.removeSnapPoints(self.fixedSnapPoints)
+            self.removeSnapPoints(self.draggingSnapPoints)
         super().mouseReleaseEvent(event)
         
     def wheelEvent(self, event: QWheelEvent):
@@ -137,6 +140,20 @@ class DrawingArea(QGraphicsView):
             self.scale(scaleFactor, scaleFactor)
         else:
             self.scale(1.0 / scaleFactor, 1.0 / scaleFactor)
+
+    def handleDragging(self, mousePosition):
+        # Remove old dragging snap points
+        self.removeSnapPoints(self.draggingSnapPoints)
+
+        scenePos = self.mapToScene(mousePosition)
+        newPos = scenePos - self.dragOffset
+        self.currentlyDraggingItem.setPos(newPos)
+
+        # Calculate new dragging snap points
+        draggingSnapPoints = self.calculateDraggingItemSnapPoints()
+        self.displaySnapPoints(draggingSnapPoints, self.draggingSnapPoints)  # Use draggingSnapPoints here
+        # self.checkSnapPointsProximity()
+        self.checkSnapPointsProximityAndSnap()
 
     def updateTemporaryRectangle(self, event):
         """Update or create a temporary rectangle during mouse movement."""
@@ -237,74 +254,94 @@ class DrawingArea(QGraphicsView):
     def keyPressEvent(self, event):
         if event.key() == Qt.Key_E and event.modifiers() == Qt.ControlModifier:
             self.exportToDXF("your_drawing.dxf")
+
+        if event.key() == Qt.Key_S:
+            for visual in self.draggingSnapPoints:
+                # Assuming each visual is a QGraphicsRectItem and you want the center of the rectangle
+                rect = visual.rect()  # This gets the rectangle defining the QGraphicsRectItem
+                center = visual.mapToScene(rect.center())  # Converts the rectangle's center to scene coordinates
+                print(f"({center.x()}, {center.y()})")
+
         else:
             super().keyPressEvent(event)
-
-    # def getClosestSnapPoint(self, pos):
-    #     print ("Get closest snap point")
-    #     closestPoint = None
-    #     minDistance = float('inf')
-    #     for point in self.snapPoints:
-    #         distance = (pos - point).manhattanLength()
-    #         if distance < minDistance and distance <= self.snapDetectionRadius:
-    #             closestPoint = point
-    #             minDistance = distance
-    #     return closestPoint
         
-    def updateSnapPoints(self):
-        self.snapPoints.clear()
+    def calculateFixedSnapPoints(self, excludeItem=None):
+        snapPoints = []
         for item in self.scene.items():
-            if isinstance(item, QGraphicsRectItem):
+            if item != excludeItem and isinstance(item, QGraphicsRectItem):
                 rect = item.rect()
-                # Assuming the item's position is the top-left point of the rectangle
-                self.snapPoints.extend([
-                    item.pos() + rect.topLeft(),
-                    item.pos() + rect.topRight(),
-                    item.pos() + rect.bottomLeft(),
-                    item.pos() + rect.bottomRight(),
-                ])
+                snapPoints += [
+                    item.mapToScene(rect.topLeft()),
+                    item.mapToScene(rect.topRight()),
+                    item.mapToScene(rect.bottomLeft()),
+                    item.mapToScene(rect.bottomRight())
+                ]
+        return snapPoints
 
-    def showSnapPoints(self, show):
-        # Remove all existing snap point markers
-        while self.snapPointVisuals:
-            marker = self.snapPointVisuals.pop(0)  # Remove the first element
-            self.scene.removeItem(marker)
+    def calculateDraggingItemSnapPoints(self):
+        if not self.currentlyDraggingItem:
+            return []
 
-        # If showing snap points, add them to the scene
-        if show:
-            self.updateSnapPoints()  # Update the list of snap points based on current scene items
-            for point in self.snapPoints:
-                marker = self.scene.addRect(point.x() - 10, point.y() - 10, 20, 20, QPen(Qt.yellow))
-                self.snapPointVisuals.append(marker)
+        snapPoints = []
+        if isinstance(self.currentlyDraggingItem, QGraphicsRectItem):
+            rect = self.currentlyDraggingItem.rect()
+            # Calculate snap points (e.g., corners for a rectangle)
+            snapPoints = [
+                self.currentlyDraggingItem.mapToScene(rect.topLeft()),
+                self.currentlyDraggingItem.mapToScene(rect.topRight()),
+                self.currentlyDraggingItem.mapToScene(rect.bottomLeft()),
+                self.currentlyDraggingItem.mapToScene(rect.bottomRight())
+            ]
+        return snapPoints
 
-    def findClosestSnapPoint(self, pos):
-        print("Find closest snap point")
-        closestPoint = None
-        minDistance = float('inf')
-        for point in self.snapPoints:
-            distance = (pos - point).manhattanLength()  # You can also use Euclidean distance
-            if distance < minDistance:
-                closestPoint = point
-                minDistance = distance
-                print((closestPoint.x(), closestPoint.y()))
-        return closestPoint, minDistance
+    def displaySnapPoints(self, snapPoints, targetList):
+        for point in snapPoints:
+            visual = self.scene.addRect(point.x() - 10, point.y() - 10, 20, 20, QPen(Qt.yellow))
+            targetList.append(visual)
 
-    def exportToDXF(self, filename):
-        import ezdxf
-        doc = ezdxf.new(setup=True)
-        msp = doc.modelspace()
+    def removeSnapPoints(self, visuals):
+        for visual in visuals:
+            self.scene.removeItem(visual)
+        visuals.clear()
 
-        for item in self.scene().items():
-            if isinstance(item, QGraphicsRectItem):
-                rect = item.rect()
-                # Add a rectangle for each QGraphicsRectItem
-                # Note: You might need to adjust the points based on your coordinate system
-                msp.add_lwpolyline([
-                    (rect.x(), rect.y()),
-                    (rect.x() + rect.width(), rect.y()),
-                    (rect.x() + rect.width(), rect.y() + rect.height()),
-                    (rect.x(), rect.y() + rect.height()),
-                    (rect.x(), rect.y())
-                ], close=True)
+    def checkSnapPointsProximity(self):
+        specified_distance = self.snapDetectionRadius  # or any other value you'd like to use
 
-        doc.saveas(filename)
+        for fixedVisual in self.fixedSnapPoints:
+            fixedCenter = fixedVisual.mapToScene(fixedVisual.rect().center())
+
+            for draggingVisual in self.draggingSnapPoints:
+                draggingCenter = draggingVisual.mapToScene(draggingVisual.rect().center())
+
+                distance = (fixedCenter - draggingCenter).manhattanLength()
+                if distance <= specified_distance:
+                    # Perform your action here
+                    print(f"Snap point from dragging is within {specified_distance} units of a fixed snap point.")
+                    # Example action: snapping the dragging item to the fixed item's position
+                    # This is where you could adjust positions or take other actions as needed
+
+    def checkSnapPointsProximityAndSnap(self):
+        specified_distance = self.snapDetectionRadius
+        for fixedVisual in self.fixedSnapPoints:
+            for draggingVisual in self.draggingSnapPoints:
+                fixedPoint = fixedVisual.mapToScene(fixedVisual.rect().center())
+                draggingPoint = draggingVisual.mapToScene(draggingVisual.rect().center())
+
+                if (fixedPoint - draggingPoint).manhattanLength() <= specified_distance:
+                    self.snapObjectToFixedPoint(draggingPoint, fixedPoint - draggingPoint)
+                    return  # Assuming only one snap action per drag operation for simplicity
+
+    def snapObjectToFixedPoint(self, draggingPoint, offset):
+        # Calculate the new position for the currentlyDraggingItem by applying the offset
+        if self.currentlyDraggingItem:
+            newPos = self.currentlyDraggingItem.pos() + offset
+            self.currentlyDraggingItem.setPos(newPos)
+            # After snapping, you might want to clear the visuals or update them according to the new position
+            self.updateAfterSnap()
+
+    def updateAfterSnap(self):
+        # Clear dragging visuals
+        self.removeSnapPoints(self.draggingSnapPoints)
+        # Optionally, recalculate and display new snap points based on the new positions
+        # This might not be necessary if the snapping action concludes the drag operation
+        # and the user needs to initiate a new drag to move objects again.

@@ -17,19 +17,21 @@ class HoverableRectItem(QGraphicsRectItem):
         self.setAcceptHoverEvents(True)
         self.normalPen = QPen(Qt.white)
         self.hoverPen = QPen(QColor(50, 100, 200))
+        # self.normalPen.setWidth(10)
+        self.hoverPen.setWidth(2)
         self.normalBrush = QBrush(QColor(20, 100, 160, 127))
         self.hoverBrush = QBrush(QColor(20, 100, 160, 200))
         self.setPen(self.normalPen)
         self.setBrush(self.normalBrush)
 
     def hoverEnterEvent(self, event):
-        self.setPen(self.hoverPen)
+        # self.setPen(self.hoverPen)
         self.setBrush(self.hoverBrush)
         # print("Hover enter")
         super().hoverEnterEvent(event)
 
     def hoverLeaveEvent(self, event):
-        self.setPen(self.normalPen)
+        # self.setPen(self.normalPen)
         self.setBrush(self.normalBrush)
         # print("Hover leave")
         super().hoverLeaveEvent(event)
@@ -56,12 +58,15 @@ class DrawingArea(QGraphicsView):
         self.lengthEdit.textChanged.connect(self.updateRectFromInput)
         self.widthEdit.textChanged.connect(self.updateRectFromInput)
 
-        self.snapDetectionRadius = 20  # Pixels within which snapping should occur
         self.currentlyDraggingItem = None  # Track the item being dragged
         self.dragOffset = QPointF(0, 0)  # Initialize dragOffset
 
         self.fixedSnapPoints = []
         self.draggingSnapPoints = []
+        self.snapDetectionRadius = 50
+
+        self.snapPointPen = QPen(QColor(Qt.yellow))
+        self.snapPointPen.setWidth(4)
 
     def initializeScene(self, scene):
         self.scene = scene
@@ -296,7 +301,7 @@ class DrawingArea(QGraphicsView):
 
     def displaySnapPoints(self, snapPoints, targetList):
         for point in snapPoints:
-            visual = self.scene.addRect(point.x() - 10, point.y() - 10, 20, 20, QPen(Qt.yellow))
+            visual = self.scene.addRect(point.x() - (self.snapDetectionRadius / 2), point.y() - (self.snapDetectionRadius / 2), self.snapDetectionRadius, self.snapDetectionRadius, QPen(self.snapPointPen))
             targetList.append(visual)
 
     def removeSnapPoints(self, visuals):

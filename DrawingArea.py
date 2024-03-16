@@ -8,7 +8,7 @@ from PyQt5.QtWidgets import (
     QLineEdit,
 )
 from PyQt5.QtCore import Qt, pyqtSignal, QPointF, QRectF, QLineF
-from PyQt5.QtGui import QColor, QPen, QBrush, QWheelEvent, QMouseEvent
+from PyQt5.QtGui import QColor, QPen, QBrush, QWheelEvent, QMouseEvent, QCursor
 import ezdxf
 
 class HoverableRectItem(QGraphicsRectItem):
@@ -53,6 +53,8 @@ class DrawingArea(QGraphicsView):
         self.setFocusPolicy(Qt.StrongFocus)
 
         self._isDraggingStarted = False  # Initialize the drag operation flag
+        self._isPanning = False
+        self._lastPanPoint = QPointF()
 
         # Connect the textChanged signals
         self.lengthEdit.textChanged.connect(self.updateRectFromInput)
@@ -68,6 +70,11 @@ class DrawingArea(QGraphicsView):
         self.snapPointPen = QPen(QColor(Qt.yellow))
         self.snapPointPen.setWidth(4)
 
+        self.rectanglePen = QPen(QColor(Qt.white))
+        self.rectanglePen.setWidth(4)
+
+        self.lastCursorPos = QPointF(0, 0)
+
     def initializeScene(self, scene):
         self.scene = scene
         self.setBackgroundBrush(QColor("black"))
@@ -80,6 +87,7 @@ class DrawingArea(QGraphicsView):
 
     def mouseMoveEvent(self, event):
         scenePos = self.mapToScene(event.pos())
+        self.lastCursorPos = scenePos
         self.positionChanged.emit(f"Scene Position = ({scenePos.x():.2f}, {scenePos.y():.2f})")
 
         if self.currentlyDraggingItem:
@@ -104,31 +112,49 @@ class DrawingArea(QGraphicsView):
             self.widthEdit.move(10, self.viewport().height() - 30)
             self.lengthEdit.show()
             self.widthEdit.show()
+
+        elif self._isPanning:
+            delta = event.pos() - self._lastPanPoint
+            self._lastPanPoint = event.pos()
+            self.horizontalScrollBar().setValue(self.horizontalScrollBar().value() - delta.x())
+            self.verticalScrollBar().setValue(self.verticalScrollBar().value() - delta.y())
+
         else:
             # Hide snap points when not dragging or drawing.
             # self.showSnapPoints(False)
             super().mouseMoveEvent(event)
 
     def mousePressEvent(self, event: QMouseEvent):
-        if event.button() == Qt.LeftButton and self.drawingMode == 'rectangle':
+        if event.button() == Qt.LeftButton:
+            self.handleLeftButtonPressEvent(event)
+        elif event.button() == Qt.MiddleButton:
+            self.handleMiddleButtonPressEvent(event)
+        else:
+            super().mousePressEvent(event)
+
+    def handleLeftButtonPressEvent(self, event: QMouseEvent):
+        # Handling rectangle drawing mode
+        if self.drawingMode == 'rectangle':
             if not self.firstClickPoint:
-                # First click - set the starting point
                 self.firstClickPoint = self.mapToScene(event.pos())
             else:
-                # Second click - finalize the drawing
                 self.finalizeDrawing(self.mapToScene(event.pos()))
-        super().mousePressEvent(event)
+                return  # Exit the method to avoid further processing
+        
+        # Handling item dragging
         item = self.itemAt(event.pos())
-        if item and isinstance(item, QGraphicsRectItem):  # Adjust based on your item type
+        if item and isinstance(item, QGraphicsRectItem):
             self.currentlyDraggingItem = item
-            # Calculate the offset from the item's top-left corner to the mouse position
             self.dragOffset = self.mapToScene(event.pos()) - item.pos()
-            print(f"Item pos = ({item.pos().x()}, {item.pos().y()})")
-            print(f"Drag offset = ({self.dragOffset.x()}, {self.dragOffset.y()})")
-            self._isDraggingStarted = True  # Dragging starts
+            self._isDraggingStarted = True
         else:
             self.currentlyDraggingItem = None
             self.dragOffset = QPointF(0, 0)
+
+    def handleMiddleButtonPressEvent(self, event: QMouseEvent):
+        self._isPanning = True
+        self._lastPanPoint = event.pos()
+        self.setCursor(Qt.ClosedHandCursor)
 
     def mouseReleaseEvent(self, event: QMouseEvent):
         if self.currentlyDraggingItem:
@@ -137,7 +163,11 @@ class DrawingArea(QGraphicsView):
             self.removeSnapPoints(self.fixedSnapPoints)
             self.removeSnapPoints(self.draggingSnapPoints)
         super().mouseReleaseEvent(event)
-        
+
+        if event.button() == Qt.MiddleButton and self._isPanning:
+            self._isPanning = False
+            self.setCursor(Qt.ArrowCursor)
+
     def wheelEvent(self, event: QWheelEvent):
         """Handle wheel events for zooming."""
         scaleFactor = 1.1
@@ -160,26 +190,6 @@ class DrawingArea(QGraphicsView):
         # self.checkSnapPointsProximity()
         self.checkSnapPointsProximityAndSnap()
 
-    def updateTemporaryRectangle(self, event):
-        """Update or create a temporary rectangle during mouse movement."""
-        # Remove temporary rectangle if exists
-        if self.tempRect:
-            self.scene.removeItem(self.tempRect)
-            self.tempRect = None  # Remove the reference to fully delete it
-        
-        # Calculate rectangle coordinates for the temporary rectangle
-        start = self.firstClickPoint
-        end = self.mapToScene(event.pos())
-        rect = QRectF(QPointF(min(start.x(), end.x()), min(start.y(), end.y())),
-                      QPointF(max(start.x(), end.x()), max(start.y(), end.y())))
-
-        # Create and add new temporary rectangle
-        self.tempRect = self.scene.addRect(rect, QPen(Qt.white))
-
-        if self.drawingMode == 'rectangle' and self.firstClickPoint:
-            endPoint = self.mapToScene(event.pos())
-            self.updateTemporaryRectangleDirectly(self.firstClickPoint, endPoint)
-
     def updateTemporaryRectangleDirectly(self, startPoint, endPoint):
         if self.tempRect:
             self.scene.removeItem(self.tempRect)
@@ -195,7 +205,18 @@ class DrawingArea(QGraphicsView):
             width = float(self.widthEdit.text())
         except ValueError:
             return  # Do nothing if the input can't be converted to float
-
+        
+        # Get the current cursor position relative to the scene
+        cursorPos = self.mapToScene(self.mapFromGlobal(QCursor.pos()))
+        
+        # Determine the direction for length (x-axis)
+        if cursorPos.x() < self.firstClickPoint.x():
+            length = -length  # Apply length negatively if cursor is to the left
+        
+        # Determine the direction for width (y-axis)
+        if cursorPos.y() < self.firstClickPoint.y():
+            width = -width  # Apply width negatively if cursor is above
+            
         # Calculate the second point of the rectangle based on length and width input
         secondPoint = QPointF(self.firstClickPoint.x() + length, self.firstClickPoint.y() + width)
 
@@ -215,6 +236,18 @@ class DrawingArea(QGraphicsView):
             try:
                 length = float(self.lengthEdit.text())
                 width = float(self.widthEdit.text())
+
+                # Assume cursorPos is the last known position of the cursor stored in self.lastCursorPos
+                cursorPos = self.lastCursorPos
+                
+                # Determine the direction for length (x-axis)
+                if cursorPos.x() < self.firstClickPoint.x():
+                    length = -length
+
+                # Determine the direction for width (y-axis)
+                if cursorPos.y() < self.firstClickPoint.y():
+                    width = -width
+                    
                 secondClickPoint = QPointF(self.firstClickPoint.x() + length, self.firstClickPoint.y() + width)
             except ValueError:
                 print("Invalid input for dimensions. Exiting without drawing.")
@@ -227,7 +260,8 @@ class DrawingArea(QGraphicsView):
 
         rect = QRectF(self.firstClickPoint, secondClickPoint).normalized()
         finalRect = HoverableRectItem(rect)
-        finalRect.setPen(QPen(Qt.white))
+        finalRect.setPen(self.rectanglePen)
+        
         finalRect.setBrush(QColor(20, 100, 160, 127))
         finalRect.setFlags(QGraphicsItem.ItemIsSelectable | QGraphicsItem.ItemIsMovable)
         self.scene.addItem(finalRect)
@@ -245,11 +279,20 @@ class DrawingArea(QGraphicsView):
         self.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
 
     def drawOriginCrosshair(self):
-        """Draw the origin crosshair on the scene."""
-        pen = QPen(Qt.white, 2)
-        self.scene.addItem(QGraphicsLineItem(QLineF(-1000, 0, 1000, 0)).setPen(pen))
-        self.scene.addItem(QGraphicsLineItem(QLineF(0, -1000, 0, 1000)).setPen(pen))
-        pass
+        # Ensure pen is defined with desired properties for visibility
+        pen = QPen(Qt.gray, 1)
+
+        # Create line items for the crosshair
+        horizontalLine = QGraphicsLineItem(-10000, 0, 10000, 0)
+        verticalLine = QGraphicsLineItem(0, -10000, 0, 10000)
+
+        # Set the pen for each line item
+        horizontalLine.setPen(pen)
+        verticalLine.setPen(pen)
+
+        # Add the line items to the scene
+        self.scene.addItem(horizontalLine)
+        self.scene.addItem(verticalLine)
 
     def setDrawingMode(self, mode):
         """Set the current drawing mode."""
@@ -271,7 +314,7 @@ class DrawingArea(QGraphicsView):
             super().keyPressEvent(event)
         
     def calculateFixedSnapPoints(self, excludeItem=None):
-        snapPoints = []
+        snapPoints = [QPointF(0, 0)]
         for item in self.scene.items():
             if item != excludeItem and isinstance(item, QGraphicsRectItem):
                 rect = item.rect()
@@ -308,22 +351,6 @@ class DrawingArea(QGraphicsView):
         for visual in visuals:
             self.scene.removeItem(visual)
         visuals.clear()
-
-    def checkSnapPointsProximity(self):
-        specified_distance = self.snapDetectionRadius  # or any other value you'd like to use
-
-        for fixedVisual in self.fixedSnapPoints:
-            fixedCenter = fixedVisual.mapToScene(fixedVisual.rect().center())
-
-            for draggingVisual in self.draggingSnapPoints:
-                draggingCenter = draggingVisual.mapToScene(draggingVisual.rect().center())
-
-                distance = (fixedCenter - draggingCenter).manhattanLength()
-                if distance <= specified_distance:
-                    # Perform your action here
-                    print(f"Snap point from dragging is within {specified_distance} units of a fixed snap point.")
-                    # Example action: snapping the dragging item to the fixed item's position
-                    # This is where you could adjust positions or take other actions as needed
 
     def checkSnapPointsProximityAndSnap(self):
         specified_distance = self.snapDetectionRadius

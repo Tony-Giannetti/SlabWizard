@@ -63,13 +63,15 @@ class MainWindow(QMainWindow):
         if event.key() == Qt.Key_R:
             self.drawingArea.setDrawingMode('rectangle')
 
-        if event.key() == Qt.Key_Enter:
-            self.drawingArea.finalizeDrawing()
-            # print("Enter pressed")
+        if event.key() == Qt.Key_L:
+            self.drawingArea.setDrawingMode('line')
+
+        # if event.key() == Qt.Key_Enter:
+        #     self.drawingArea.finalizeDrawing()
+        #     # print("Enter pressed")
 
         if event.key() == Qt.Key_C:
-            self.drawingArea.calculateAllSnapPoints()
-            print("Calculate all snap points")
+            pass
 
         if event.key() == Qt.Key_D:
             points = self.drawingArea.calculateAllSnapPoints()

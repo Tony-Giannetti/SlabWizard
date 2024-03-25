@@ -10,31 +10,82 @@ from PyQt5.QtWidgets import (
 from PyQt5.QtCore import Qt, pyqtSignal, QPointF, QRectF, QLineF
 from PyQt5.QtGui import QColor, QPen, QBrush, QWheelEvent, QMouseEvent, QCursor
 import ezdxf
+from math import atan2, degrees
+
+class BaseEntity(QGraphicsItem):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.setAcceptHoverEvents(True)
+        self.isTemporary = False
+        self.normalPen = QPen(Qt.black, 2)
+        self.hoverPen = QPen(QColor(50, 100, 250), 2.5)  # Enhanced hover style
+        self.updatePenStyle()
+
+    def setTemporary(self, temporary=True):
+        """Mark the entity as temporary or permanent."""
+        self.isTemporary = temporary
+        self.updatePenStyle()
+
+    def updatePenStyle(self):
+        """Update the pen style based on the entity state (temporary or not)."""
+        if self.isTemporary:
+            self.setPen(QPen(Qt.gray, 2, Qt.DashLine))
+        else:
+            self.setPen(self.normalPen)
+
+    def hoverEnterEvent(self, event):
+        """Handle hover enter events to change the appearance of the entity."""
+        self.setPen(self.hoverPen)
+        self.update()  # Refresh the item
+
+    def hoverLeaveEvent(self, event):
+        """Handle hover leave events to reset the appearance of the entity."""
+        self.updatePenStyle()
+        self.update()
+
+    def paint(self, painter, option, widget=None):
+        """Custom paint method, to be implemented by derived classes."""
+        pass
 
 class LineEntity(QGraphicsLineItem):
-        def __init__(self, line):
-            super().__init__(line)
-            self.setAcceptHoverEvents(True)
-            self.normalPen = QPen(Qt.white)
-            self.hoverPen = QPen(QColor(50, 100, 200))
-            # self.normalPen.setWidth(10)
-            self.hoverPen.setWidth(2)
-            self.normalBrush = QBrush(QColor(20, 100, 160, 127))
-            self.hoverBrush = QBrush(QColor(20, 100, 160, 200))
-            self.setPen(self.normalPen)
-            self.setBrush(self.normalBrush)
+    def __init__(self, start_point=None, end_point=None, temporary=False, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.start_point = start_point
+        self.end_point = end_point if end_point else start_point
+        self.setTemporary(temporary)  # Call to base class method
+        self.updatePenStyle()
+        self.setAcceptHoverEvents(True)
+        self.setFlags(QGraphicsItem.ItemIsSelectable | QGraphicsItem.ItemIsMovable)
+        self.hoverPen = QPen(QColor(50, 100, 250), 2.5)  # Define hover pen style
 
-        def hoverEnterEvent(self, event):
-            # self.setPen(self.hoverPen)
-            self.setBrush(self.hoverBrush)
-            # print("Hover enter")
-            super().hoverEnterEvent(event)
+    def setEndPoint(self, end_point):
+        self.end_point = end_point
+        self.setLine(QLineF(self.start_point, self.end_point))
+        self.update()
 
-        def hoverLeaveEvent(self, event):
-            # self.setPen(self.normalPen)
-            self.setBrush(self.normalBrush)
-            # print("Hover leave")
-            super().hoverLeaveEvent(event)
+    def setTemporary(self, temporary=True):
+        self.isTemporary = temporary
+        self.updatePenStyle()
+
+    def updatePenStyle(self):
+        if self.isTemporary:
+            self.setPen(QPen(Qt.gray, 2, Qt.DashLine))
+        else:
+            self.setPen(QPen(Qt.white, 4))
+
+    def hoverEnterEvent(self, event):
+        print("Line hover enter")
+        self.setPen(self.hoverPen)
+        self.update()  # Refresh the item to apply the new pen style
+
+    def hoverLeaveEvent(self, event):
+        print("line hover leave")
+        self.updatePenStyle()  # Reset the pen style when the cursor leaves the item
+        self.update()
+
+    # def paint(self, painter, option, widget=None):
+    #     super().paint(painter, option, widget)
+
 
 class HoverableRectItem(QGraphicsRectItem):
     def __init__(self, rect):
@@ -80,7 +131,7 @@ class SnapManager:
         self.hovering_snap_points = []
 
     def calculateFixedSnapPoints(self, excludeItem=None):
-        print("Calculate fixed snap points: ")
+        # print("Calculate fixed snap points: ")
         snapPoints = [QPointF(0, 0)]
         for item in self.scene.items():
             if item != excludeItem and isinstance(item, QGraphicsRectItem):
@@ -181,13 +232,10 @@ class DrawingArea(QGraphicsView):
         self.drawOriginCrosshair()
 
     def mouseMoveEvent(self, event):
-        super().mouseMoveEvent(event)
         scenePos = self.mapToScene(event.pos())
         self.lastCursorPos = scenePos
         self.positionChanged.emit(f"Scene Position = ({scenePos.x():.2f}, {scenePos.y():.2f})")
 
-
-        # Display snap points only if not currently dragging an item
         if not self.currentlyDraggingItem:
             # print("Not dragging")
             self.snapManager.display_hovering_snap_points(scenePos)
@@ -222,36 +270,32 @@ class DrawingArea(QGraphicsView):
             self.horizontalScrollBar().setValue(self.horizontalScrollBar().value() - delta.x())
             self.verticalScrollBar().setValue(self.verticalScrollBar().value() - delta.y())
 
-
     def mousePressEvent(self, event: QMouseEvent):
         if event.button() == Qt.LeftButton:
-            self.handleLeftButtonPressEvent(event)
+            scenePos = self.mapToScene(event.pos())
+
+            if self.drawingMode == 'line':
+                self.handleLineTool(event, 'click')
+
+            elif self.drawingMode == 'rectangle':
+                if not self.firstClickPoint:
+                    self.firstClickPoint = scenePos
+                else:
+                    self.finalizeDrawing(scenePos)
+                    
+            else:
+                item = self.itemAt(event.pos())
+                if item and isinstance(item, (QGraphicsRectItem, LineEntity)):  # Handle other entity types similarly
+                    self.currentlyDraggingItem = item
+                    self.dragOffset = scenePos - item.pos()
+                    self._isDraggingStarted = True
+
         elif event.button() == Qt.MiddleButton:
             self.handleMiddleButtonPressEvent(event)
+
         else:
             super().mousePressEvent(event)
 
-    def handleLeftButtonPressEvent(self, event: QMouseEvent):
-        # Handling rectangle drawing mode
-        if self.drawingMode == 'rectangle':
-            if not self.firstClickPoint:
-                self.firstClickPoint = self.mapToScene(event.pos())
-            else:
-                self.finalizeDrawing(self.mapToScene(event.pos()))
-                return  # Exit the method to avoid further processing
-            
-        if self.drawingMode == 'line':
-            self.handleLineTool(event, 'click')
-        
-        # Handling item dragging
-        item = self.itemAt(event.pos())
-        if item and isinstance(item, QGraphicsRectItem):
-            self.currentlyDraggingItem = item
-            self.dragOffset = self.mapToScene(event.pos()) - item.pos()
-            self._isDraggingStarted = True
-        else:
-            self.currentlyDraggingItem = None
-            self.dragOffset = QPointF(0, 0)
 
     def handleMiddleButtonPressEvent(self, event: QMouseEvent):
         self._isPanning = True
@@ -260,7 +304,7 @@ class DrawingArea(QGraphicsView):
 
     def mouseReleaseEvent(self, event: QMouseEvent):
         if self.drawingMode == 'line' and self.toolState == 'drawing':
-            self.handleLineTool(event, 'release')
+            self.handleLineTool(event, 'release', self.mapToScene(event.pos()))
 
         if self.currentlyDraggingItem:
             self.currentlyDraggingItem = None
@@ -283,6 +327,29 @@ class DrawingArea(QGraphicsView):
         else:
             self.scale(1.0 / scaleFactor, 1.0 / scaleFactor)
 
+    def keyPressEvent(self, event):
+        if event.key() == Qt.Key_E and event.modifiers() == Qt.ControlModifier:
+            self.exportToDXF("your_drawing.dxf")
+
+        if event.key() == Qt.Key_S:
+            for visual in self.draggingSnapPoints:
+                # Assuming each visual is a QGraphicsRectItem and you want the center of the rectangle
+                rect = visual.rect()  # This gets the rectangle defining the QGraphicsRectItem
+                center = visual.mapToScene(rect.center())  # Converts the rectangle's center to scene coordinates
+                print(f"({center.x()}, {center.y()})")
+
+        if event.key() == Qt.Key_Q:
+            self.snapManager.calculateFixedSnapPoints()
+
+        if event.key() == Qt.Key_Enter:
+            self.finalizeDrawing()
+
+        if event.key() == Qt.Key_D:
+            pass
+            
+        else:
+            super().keyPressEvent(event)
+
     def handleDragging(self, mousePosition):
         # Remove old dragging snap points
         self.removeSnapPoints(self.draggingSnapPoints)
@@ -297,31 +364,48 @@ class DrawingArea(QGraphicsView):
         # self.checkSnapPointsProximity()
         self.checkSnapPointsProximityAndSnap()
 
-
-    def handleLineTool(self, event, eventType):
+    def handleLineTool(self, event, eventType, scenePos=None):
         scenePos = self.mapToScene(event.pos())
 
         if eventType == 'click' and self.toolState == 'idle':
             self.lineStartPoint = scenePos
+            self.tempLine = LineEntity(start_point=scenePos, temporary=True)
+            self.scene.addItem(self.tempLine)
             self.toolState = 'drawing'
+            self.constrainedEndPoint = scenePos
 
-        elif eventType == 'move' and self.toolState == 'drawing':
-            if self.tempLine:
-                self.scene.removeItem(self.tempLine)
-            self.tempLine = self.scene.addLine(QLineF(self.lineStartPoint, scenePos), QPen(Qt.white))
+        elif eventType == 'move' and self.toolState == 'drawing' and self.tempLine:
+            # Direct distance between the start point and current cursor position
+            direct_distance = (scenePos - self.lineStartPoint).manhattanLength()
+
+            # Calculate the horizontal and vertical deviations
+            horizontal_deviation = abs(scenePos.y() - self.lineStartPoint.y())
+            vertical_deviation = abs(scenePos.x() - self.lineStartPoint.x())
+
+            # Define the threshold for snapping
+            snap_threshold = 16  # Pixels
+
+            if horizontal_deviation <= snap_threshold:
+                # Snap horizontally if the deviation in the y-axis is within the threshold
+                self.constrainedEndPoint = QPointF(scenePos.x(), self.lineStartPoint.y())
+            elif vertical_deviation <= snap_threshold:
+                # Snap vertically if the deviation in the x-axis is within the threshold
+                self.constrainedEndPoint = QPointF(self.lineStartPoint.x(), scenePos.y())
+            else:
+                # No snapping; use the actual cursor position
+                self.constrainedEndPoint = scenePos
+
+            self.tempLine.setEndPoint(self.constrainedEndPoint)
 
         elif eventType == 'click' and self.toolState == 'drawing':
-            self.lineEndPoint = scenePos
-            self.scene.addLine(QLineF(self.lineStartPoint, self.lineEndPoint), QPen(Qt.white))
-            self.toolState = 'idle'
-
-            if self.tempLine:  # Remove the temporary line if it exists
+            # First, remove the temporary line from the scene
+            if self.tempLine:
+                finalLine = LineEntity(start_point=self.lineStartPoint, end_point=self.constrainedEndPoint, temporary=False)
+                finalLine.setEndPoint(self.constrainedEndPoint)
+                self.scene.addItem(finalLine)
                 self.scene.removeItem(self.tempLine)
+                self.toolState = 'idle'
                 self.tempLine = None
-
-    def drawLine(self, startPoint, endPoint):
-        line = QLineF(startPoint, endPoint)
-        self.scene.addItem(line)
 
 
     def updateTemporaryRectangleDirectly(self, startPoint, endPoint):
@@ -439,30 +523,6 @@ class DrawingArea(QGraphicsView):
             self.lineEndPoint = None
         
         print(f"Switched to {mode} mode.")
-
-
-    def keyPressEvent(self, event):
-        if event.key() == Qt.Key_E and event.modifiers() == Qt.ControlModifier:
-            self.exportToDXF("your_drawing.dxf")
-
-        if event.key() == Qt.Key_S:
-            for visual in self.draggingSnapPoints:
-                # Assuming each visual is a QGraphicsRectItem and you want the center of the rectangle
-                rect = visual.rect()  # This gets the rectangle defining the QGraphicsRectItem
-                center = visual.mapToScene(rect.center())  # Converts the rectangle's center to scene coordinates
-                print(f"({center.x()}, {center.y()})")
-
-        if event.key() == Qt.Key_Q:
-            self.snapManager.calculateFixedSnapPoints()
-
-        if event.key() == Qt.Key_Enter:
-            self.finalizeDrawing()
-
-        if event.key() == Qt.Key_D:
-            self.drawLine(QPointF(0.0, 0.0), QPointF(100, 100))
-            
-        else:
-            super().keyPressEvent(event)
         
     def calculateFixedSnapPoints(self, excludeItem=None):
         snapPoints = [QPointF(0, 0)]
